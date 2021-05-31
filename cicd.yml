@@ -1,0 +1,447 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description : 'pora kopal'
+
+Parameters : 
+  KeyName : 
+    Description : Key name to SSH 
+    Type : AWS::EC2::KeyPair::KeyName
+  ApplicationRepoName:
+    Type : String 
+    Description : Name of the repo 
+    Default : ccdemo 
+  ArtifactStoreS3Location:
+    Type: String 
+    Description : Name of S3 Bucket 
+    Default : 1994nestedbucket1994
+
+Resources:
+
+  MySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties: 
+      DisplayName: 'my sns topic'
+      Subscription: 
+        - Endpoint: nurahmedsabbir@gmail.com
+          Protocol: email
+      TopicName: 'fuckmylife'
+
+  MyCodeCommit:
+    Type: AWS::CodeCommit::Repository
+    Properties: 
+      RepositoryDescription: 'My stupid golang app'
+      RepositoryName: !Ref ApplicationRepoName
+      Triggers: 
+        - DestinationArn : !Ref MySNSTopic
+          Events : 
+            - updateReference
+          Name : 'is it working ?'
+
+
+
+
+  MySecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties: 
+      GroupDescription: My SG with port 22 abd 8080 inbound 
+      SecurityGroupIngress: 
+        - IpProtocol: tcp 
+          FromPort : '22'
+          ToPort : '22'
+          CidrIp : 0.0.0.0/0
+
+        - IpProtocol: tcp 
+          FromPort : '8080'
+          ToPort : '8080'
+          CidrIp : 0.0.0.0/0
+
+
+  MyCICDEC2InstanceProfileRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow 
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: MyCICDEC2InstanceProfileRolePolicy
+          PolicyDocument:
+            Version : 2012-10-17
+            Statement :
+              - Effect : Allow 
+                Action :
+                  - 's3:Get*'
+                  - 's3:List*'
+                Resource: '*'
+
+  MyInstanceProfile:
+    Type: AWS::IAM::InstanceProfile 
+    Properties:
+      Path : /
+      Roles:
+        - !Ref MyCICDEC2InstanceProfileRole
+
+
+  MyStageVMInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId : ami-09246ddb00c7c4fef
+      InstanceType: t2.micro 
+      KeyName : !Ref KeyName 
+      IamInstanceProfile: !Ref MyInstanceProfile
+      Tags: 
+        - Key: Name 
+          Value : dev 
+        - Key : Environment 
+          Value : stage
+      UserData : 
+        Fn::Base64: |
+          #!/bin/bash
+          sudo yum update
+          sudo yum install ruby
+          sudo yum install wget
+          CODEDEPLOY_BIN="/opt/codedeploy-agent/bin/codedeploy-agent"
+          $CODEDEPLOY_BIN stop
+          yum erase codedeploy-agent -y
+          cd /home/ec2-user
+          wget https://aws-codedeploy-us-east-2.s3.us-east-2.amazonaws.com/latest/install
+          chmod +x ./install
+          sudo ./install auto
+      
+
+  MyProdVMInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId : ami-09246ddb00c7c4fef
+      InstanceType: t2.micro 
+      KeyName : !Ref KeyName 
+      IamInstanceProfile: !Ref MyInstanceProfile
+      Tags: 
+        - Key: Name 
+          Value : prod
+        - Key : Environment 
+          Value : production 
+      UserData : 
+        Fn::Base64: |
+          #!/bin/bash
+          sudo yum update
+          sudo yum install ruby
+          sudo yum install wget
+          CODEDEPLOY_BIN="/opt/codedeploy-agent/bin/codedeploy-agent"
+          $CODEDEPLOY_BIN stop
+          yum erase codedeploy-agent -y
+          cd /home/ec2-user
+          wget https://aws-codedeploy-us-east-2.s3.us-east-2.amazonaws.com/latest/install
+          chmod +x ./install
+          sudo ./install auto
+  
+
+
+
+############
+
+  CodeBuildRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName : !Sub CodeBuildRole-${AWS::StackName}
+      AssumeRolePolicyDocument:
+        Version : '2012-10-17'
+        Statement:
+          - Effect : 'Allow'
+            Principal : 
+              Service : 
+                - 'codebuild.amazonaws.com'
+            Action : 
+              - 'sts:AssumeRole'
+      Path : /
+      Policies : 
+        - PolicyName: 'CodeBuildCICDAccessPolicy'
+          PolicyDocument:
+            Version : '2012-10-17'
+            Statement : 
+              - Effect : 'Allow'
+                Action : 
+                  - 'codecommit:GitPull'
+                Resource : !Sub 'arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${ApplicationRepoName}'
+
+              - Effect : 'Allow'
+                Action : 
+                  - 'logs:CreateLogGroup'
+                  - 'logs:PutLogEvents'
+                  - 'logs:CreateLogStream'
+                Resource : !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*'
+                
+              - Effect : 'Allow'
+                Action : 
+                  - 's3:PutObject'
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:ListBucket'
+                Resource : '*'
+                  # - !Sub 'arn:aws:s3:::codepipeline-${AWS::Region}-*'
+                  # - !Sub 'arn:aws:s3:::${ArtifactStoreS3Location}/*'
+                  # - !Sub 'arn:aws:s3:::${ArtifactStoreS3Location}'
+        
+
+
+
+  BuildGolangAppProject:
+    DependsOn: MyCodeCommit
+    Type : AWS::CodeBuild::Project 
+    Properties : 
+      Name : !Sub BuildRestAppCFNProject-${AWS::StackName}
+      Description: Build file for rest application
+      ServiceRole: !GetAtt [CodeBuildRole,Arn]
+      Artifacts : 
+        Type : S3 
+        Location : !Ref ArtifactStoreS3Location
+        Name : !Sub BuildRestAppCFNProject-${AWS::StackName}
+      Environment:
+        Type: LINUX_CONTAINER 
+        ComputeType : BUILD_GENERAL1_SMALL
+        Image : aws/codebuild/standard:4.0
+      Source:
+        Location: !Sub https://git-codecommit.{AWS::REGION}.amazonaws.com/v1/repos/{ApplicationRepoName}
+        Type : CODECOMMIT 
+      TimeoutInMinutes : 15 
+      Tags:
+        - Key : Name 
+          Value : !Sub BuildRestAppCFNProject-${AWS::StackName}
+
+
+#############
+
+  CodeDeployServiceRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName: !Sub CodeDeployServiceRole-${AWS::StackName}
+      AssumeRolePolicyDocument:
+        Version : 2012-10-17 
+        Statement : 
+          - Effect : Allow 
+            Principal : 
+              Service :
+                - codedeploy.amazonaws.com 
+            Action : 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName : 'CodeDeployCICDAccessPolicy'
+          PolicyDocument : 
+            Version : 2012-10-17
+            Statement:
+            - Effect: Allow
+              Action:
+                - ec2:DescribeInstances
+                - ec2:DescribeInstanceStatus
+                - ec2:TerminateInstances
+                - tag:GetResources
+                - sns:Publish
+                - cloudwatch:DescribeAlarms
+                - cloudwatch:PutMetricAlarm
+              Resource: '*'
+
+
+
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application 
+    Properties: 
+      ApplicationName : !Sub RestApp-${AWS::StackName}
+      ComputePlatform: Server 
+
+  CodeDeploymentGroup:
+    Type : AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      DeploymentGroupName : !Sub DeploymentGroup-${AWS::StackName}
+      ApplicationName: !Ref CodeDeployApplication 
+      Ec2TagFilters:
+        - Key: Name 
+          Value: dev 
+          Type : 'KEY_AND_VALUE' 
+      ServiceRoleArn: !GetAtt [CodeDeployServiceRole,Arn]
+      # Deployment:
+      #   Description: 'Fake Deploy'
+      #   IgnoreApplicationStopFailures: true 
+      #   Revision:
+      #     RevisionType: S3 
+      #     S3Location: 
+      #       Bucket : !Ref ArtifactStoreS3Location
+      #       Key : !Sub buildRestAppCFN-${AWS::StackName}
+      #       BundleType: Zip 
+
+
+  ProdCodeDeploymentGroup:
+    Type : AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      DeploymentGroupName : !Sub ProdDeploymentGroup-${AWS::StackName}
+      ApplicationName: !Ref CodeDeployApplication 
+      Ec2TagFilters:
+        - Key: Name 
+          Value: prod
+          Type : 'KEY_AND_VALUE' 
+      ServiceRoleArn: !GetAtt [CodeDeployServiceRole,Arn]
+      # Deployment:
+      #   Description: 'Fake Deploy'
+      #   IgnoreApplicationStopFailures: true 
+      #   Revision:
+      #     RevisionType: S3 
+      #     S3Location: 
+      #       Bucket : !Ref ArtifactStoreS3Location
+      #       Key : !Sub buildRestAppCFN-${AWS::StackName}
+      #       BundleType: Zip 
+
+#####################
+  CodepipelineRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      RoleName : !Sub CodePipelineRole-${AWS::StackName}
+      AssumeRolePolicyDocument:
+        Version : '2012-10-17'
+        Statement:
+          - Effect : 'Allow'
+            Principal : 
+              Service : 
+                - 'codepipeline.amazonaws.com'
+            Action : 
+              - 'sts:AssumeRole'
+      Path : /service-role/
+      Policies : 
+        - PolicyName: 'CodePipelineCICDAccessPolicy'
+          PolicyDocument:
+            Version : '2012-10-17'
+            Statement : 
+              - Effect: 'Allow'
+                Action:
+                  - 's3:DeleteObject'
+                  - 's3:GetObject'
+                  - 's3:GetObjectVersion'
+                  - 's3:ListBucket'
+                  - 's3:PutObject'
+                  - 's3:GetBucketPolicy'
+                Resource: 
+                  - !Sub arn:aws:s3:::${ArtifactStoreS3Location}
+                  - !Sub arn:aws:s3:::${ArtifactStoreS3Location}/*
+              - Effect : 'Allow'
+                Action:
+                  - 'sns:Publish'
+                Resource: '*'
+              - Effect : 'Allow'
+                Action: 
+                  - 'codecommit:ListBranches'
+                  - 'codecommit:ListRepositories'
+                  - 'codecommit:BatchGetRepositories'
+                  - 'codecommit:Get*'
+                  - 'codecommit:GitPull'
+                  - 'codecommit:UploadArchive'
+                Resource:
+                  - !Sub arn:aws:codecommit:${AWS::Region}:${AWS::AccountId}:${ApplicationRepoName} 
+              - Effect: 'Allow'
+                Action : 
+                  - 'codebuild:StartBuild'
+                  - 'codebuild:BatchGetBuilds'
+                Resource:
+                  - !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:project/BuildRestAppCFNProject-${AWS::StackName}
+                  - !Sub arn:aws:codebuild:${AWS::Region}:${AWS::AccountId}:build/BuildRestAppCFNProject-${AWS::StackName}
+              - Effect : 'Allow'
+                Action : 
+                  - 'codedeploy:CreateDeployment'
+                  - 'codedeploy:GetApplicationRevision'
+                  - 'codedeploy:GetDeployment'
+                  - 'codedeploy:GetDeploymentConfig'
+                  - 'codedeploy:RegisterApplicationRevision'
+                Resource: '*'
+
+  DeployPipeline:
+    Type: AWS::CodePipeline::Pipeline 
+    Properties:
+      Name : !Sub CICDPipeline-${AWS::StackName}
+      RoleArn: !GetAtt [CodepipelineRole,Arn]
+      ArtifactStore : 
+        Type : S3 
+        Location: !Ref ArtifactStoreS3Location
+      Stages:
+        - Name : Source 
+          Actions:
+            - Name: ApplicationSource 
+              ActionTypeId: 
+                Category: Source 
+                Owner : AWS 
+                Version : 1
+                Provider : CodeCommit 
+              OutputArtifacts:
+                - Name : ApplicationOutput 
+              Configuration : 
+                BranchName : master 
+                RepositoryName : !Ref ApplicationRepoName 
+              RunOrder : 1 
+        - Name : Build
+          Actions:
+            - Name : CodeBuild 
+              InputArtifacts :
+                - Name :  ApplicationOutput 
+              ActionTypeId : 
+                Category : Build 
+                Owner : AWS 
+                Version : 1 
+                Provider : CodeBuild 
+              OutputArtifacts : 
+                - Name : RestAppArtifact 
+              Configuration : 
+                ProjectName : !Ref BuildGolangAppProject
+              RunOrder : 1
+        - Name : DeployToStaging
+          Actions: 
+            - Name: CodeDeploy 
+              InputArtifacts:
+                - Name : RestAppArtifact 
+              ActionTypeId:
+                Category : Deploy 
+                Owner : AWS 
+                Version : 1 
+                Provider: CodeDeploy 
+              Configuration: 
+                ApplicationName: !Ref CodeDeployApplication 
+                DeploymentGroupName: !Ref CodeDeploymentGroup 
+              RunOrder : 1 
+        - Name : ProductionApproval
+          Actions:
+            - Name :  prodApproval 
+              ActionTypeId:
+                Category: Approval 
+                Owner : AWS 
+                Version : 1
+                Provider : Manual 
+              Configuration : 
+                NotificationArn : !Ref MySNSTopic
+                CustomData : Approve production deployment 
+              RunOrder : 1 
+        - Name : DeployToProduction 
+          Actions: 
+            - Name: CodeDeploy 
+              InputArtifacts:
+                - Name : RestAppArtifact 
+              ActionTypeId:
+                Category : Deploy 
+                Owner : AWS 
+                Version : 1 
+                Provider: CodeDeploy 
+              Configuration: 
+                ApplicationName: !Ref CodeDeployApplication 
+                DeploymentGroupName: !Ref ProdCodeDeploymentGroup
+              RunOrder : 1 
+
+
+
+
+
+########################
+Outputs : 
+  StageAppURL :   
+    Description : Staging Apllication access url 
+    Value : !Sub 'http://${MyStageVMInstance.PublicDnsName}:8080/'
+  ProdURL :   
+    Description : Staging Apllication access url 
+    Value : !Sub 'http://${MyProdVMInstance.PublicDnsName}:8080/'
