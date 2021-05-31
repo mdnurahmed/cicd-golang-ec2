@@ -1,0 +1,26 @@
+version: 0.0
+os: linux
+files:
+  - source: /app
+    destination: /home/sex
+hooks:
+  BeforeInstall:
+    - location: BeforeInstall.sh
+      timeout: 100
+      runas: root 
+  AfterInstall:
+    - location: AfterInstall.sh
+      timeout: 100
+      runas: root
+  ApplicationStop:
+    - location: ApplicationStop.sh
+      timeout: 100
+      runas: root
+  ApplicationStart:
+    - location: ApplicationStart.sh
+      timeout: 100
+      runas: root
+  ValidateService:
+    - location: ValidateService.sh      
+      timeout: 100
+      runas: root
