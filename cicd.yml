@@ -23,12 +23,12 @@ Resources:
       Subscription: 
         - Endpoint: nurahmedsabbir@gmail.com
           Protocol: email
-      TopicName: 'fuckmylife'
+      TopicName: 'mytopic'
 
   MyCodeCommit:
     Type: AWS::CodeCommit::Repository
     Properties: 
-      RepositoryDescription: 'My stupid golang app'
+      RepositoryDescription: 'My golang app'
       RepositoryName: !Ref ApplicationRepoName
       Triggers: 
         - DestinationArn : !Ref MySNSTopic
